@@ -1,4 +1,5 @@
 # prompts.md
+Student: Sean Eric So · Course: MGMT 6110 · Problem Set 1
 
 ## 1. First attempt at the API function with Open-Meteo
 
