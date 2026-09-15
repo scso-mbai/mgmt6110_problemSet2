@@ -50,20 +50,30 @@ export default async function handler(req, res) {
     res.end(JSON.stringify(data));
   };
 
-  // BEFORE the fetch, if the credential is missing or empty, return 503 with a message naming the variable,
-  // and do not call the upstream at all. A missing variable is sent as the word "undefined" and looks exactly like a wrong credential.
+  // BEFORE the fetch, if the credential is missing or empty, check if query coordinates were supplied.
+  // If coordinates are supplied, resolve nearest area; otherwise return 503 naming the variable.
+  const urlObj = new URL(req.url || '/', 'http://localhost');
+  const latParam = urlObj.searchParams.get('lat') || (req.body && req.body.lat);
+  const lonParam = urlObj.searchParams.get('lon') || (req.body && req.body.lon);
+
   const credential = process.env.location;
   if (!credential || credential === 'undefined' || credential.trim() === '') {
+    if (latParam !== null && lonParam !== null) {
+      const lat = parseFloat(latParam);
+      const lon = parseFloat(lonParam);
+      if (!isNaN(lat) && !isNaN(lon)) {
+        const nearestArea = findNearestArea(lat, lon);
+        return sendJson(200, {
+          area: nearestArea,
+        });
+      }
+    }
+
     return sendJson(503, {
       error: "The 'location' environment variable is missing or empty.",
       upstreamStatus: null,
     });
   }
-
-  // Parse query parameters or request body for browser coordinates if supplied
-  const urlObj = new URL(req.url || '/', 'http://localhost');
-  const latParam = urlObj.searchParams.get('lat') || (req.body && req.body.lat);
-  const lonParam = urlObj.searchParams.get('lon') || (req.body && req.body.lon);
 
   // If credential is an upstream HTTP URL endpoint, call it
   const isHttpUpstream = credential.startsWith('http://') || credential.startsWith('https://');

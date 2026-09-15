@@ -58,3 +58,36 @@ export function formatStoreDistance(distanceKm: number): string {
   }
   return `${distanceKm.toFixed(1)} km away`;
 }
+
+// Known Singapore reference areas for resolving user base location from coordinates
+export const SINGAPORE_REFERENCE_AREAS = [
+  { name: 'Woodlands', latitude: 1.4382, longitude: 103.7890 },
+  { name: 'Woodlands South', latitude: 1.4273, longitude: 103.7933 },
+  { name: 'City Hall', latitude: 1.2931, longitude: 103.8521 },
+  { name: 'Orchard', latitude: 1.3040, longitude: 103.8318 },
+  { name: 'Novena', latitude: 1.3204, longitude: 103.8438 },
+  { name: 'Bishan', latitude: 1.3508, longitude: 103.8481 },
+  { name: 'Stevens', latitude: 1.3200, longitude: 103.8260 },
+  { name: 'Serangoon', latitude: 1.3498, longitude: 103.8738 },
+  { name: 'Bright Hill', latitude: 1.3632, longitude: 103.8333 },
+  { name: 'Toa Payoh', latitude: 1.3327, longitude: 103.8476 },
+  { name: 'Bugis', latitude: 1.3005, longitude: 103.8561 },
+  { name: 'Promenade', latitude: 1.2934, longitude: 103.8604 },
+  { name: 'Gardens by the Bay', latitude: 1.2816, longitude: 103.8636 },
+  { name: 'MacPherson', latitude: 1.3262, longitude: 103.8897 },
+  { name: 'Marymount', latitude: 1.3487, longitude: 103.8394 },
+];
+
+export function findNearestSingaporeArea(lat: number, lon: number): string {
+  let nearest = SINGAPORE_REFERENCE_AREAS[0];
+  let minDistance = Infinity;
+
+  for (const area of SINGAPORE_REFERENCE_AREAS) {
+    const dist = calculateHaversineDistanceKm(lat, lon, area.latitude, area.longitude);
+    if (dist < minDistance) {
+      minDistance = dist;
+      nearest = area;
+    }
+  }
+  return nearest.name;
+}

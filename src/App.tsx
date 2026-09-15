@@ -6,6 +6,7 @@ import { CardDetailScreen } from './components/CardDetailScreen';
 import { CartScreen } from './components/CartScreen';
 import { StoreLocatorModal } from './components/StoreLocatorModal';
 import { CartItem, TradingCard, CardStoreInventory, BaseLocationStatus } from './types';
+import { findNearestSingaporeArea } from './utils/geo';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<'home' | 'detail' | 'cart'>('home');
@@ -21,18 +22,54 @@ export default function App() {
   const [baseStatus, setBaseStatus] = useState<BaseLocationStatus>('loading');
   const [baseSentence, setBaseSentence] = useState<string>('Loading...');
 
-  // Fetch live base location using browser's built-in Geolocation API via serverless function
+  // Fetch live base location using browser's built-in Geolocation API
   const fetchBaseLocation = useCallback(async () => {
     setBaseStatus('loading');
     setBaseSentence('Loading...');
 
+    // 7. Detect whether the application is running inside an iframe using: window.self !== window.top
+    let isInsideIframe = false;
+    try {
+      isInsideIframe = window.self !== window.top;
+    } catch {
+      isInsideIframe = true;
+    }
+
+    if (isInsideIframe) {
+      console.log('App is running inside an iframe. Geolocation may be restricted by the parent page\'s Permissions Policy.');
+    }
+
+    // 2. Before requesting location, log these diagnostics to the console:
+    //    - window.isSecureContext
+    //    - window.location.origin
+    //    - whether navigator.geolocation exists
+    const isSecureContext = typeof window !== 'undefined' ? window.isSecureContext : undefined;
+    const locationOrigin = typeof window !== 'undefined' ? window.location?.origin : undefined;
+    const hasGeolocation = Boolean(typeof navigator !== 'undefined' && 'geolocation' in navigator);
+
+    console.log('Geolocation Diagnostic - window.isSecureContext:', isSecureContext);
+    console.log('Geolocation Diagnostic - window.location.origin:', locationOrigin);
+    console.log('Geolocation Diagnostic - navigator.geolocation exists:', hasGeolocation);
+
+    // 3. Query the browser's geolocation permission using: navigator.permissions.query({ name: "geolocation" })
+    //    Log whether the returned state is: granted, prompt, denied
+    if (typeof navigator !== 'undefined' && navigator.permissions && typeof navigator.permissions.query === 'function') {
+      try {
+        const permissionStatus = await navigator.permissions.query({ name: 'geolocation' });
+        console.log('Geolocation permission state:', permissionStatus.state);
+      } catch (permError) {
+        console.warn('Could not query navigator.permissions for geolocation:', permError);
+      }
+    }
+
     if (typeof window === 'undefined' || !('geolocation' in navigator)) {
       setBaseLocation(null);
-      setBaseStatus('unreachable');
-      setBaseSentence('Unavailable');
+      setBaseStatus('refused');
+      setBaseSentence('Location access is unavailable or has been blocked.');
       return;
     }
 
+    // 1. Inspect how navigator.geolocation.getCurrentPosition() is called
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords || {};
@@ -47,83 +84,76 @@ export default function App() {
         // Store user coordinates for local Haversine distance calculations
         setUserCoords({ latitude, longitude });
 
+        // Attempt serverless function to resolve area name
         try {
           const response = await fetch(`/api/location?lat=${latitude}&lon=${longitude}`);
           const contentType = response.headers.get('content-type') || '';
 
-          if (!contentType.includes('application/json')) {
-            setBaseLocation(null);
-            setBaseStatus('unreachable');
-            setBaseSentence('Unavailable');
-            return;
-          }
-
-          if (!response.ok) {
-            setBaseLocation(null);
-            if (response.status === 502 || response.status === 504) {
-              setBaseStatus('unreachable');
-              setBaseSentence('Unavailable');
-            } else {
-              setBaseStatus('refused');
-              setBaseSentence('Access Refused');
+          if (contentType.includes('application/json') && response.ok) {
+            const data = await response.json();
+            const areaName = data?.area || data?.name;
+            if (areaName && typeof areaName === 'string' && areaName.trim() !== '') {
+              setBaseLocation(areaName.trim());
+              setBaseStatus('success');
+              setBaseSentence(areaName.trim());
+              return;
             }
-            return;
           }
-
-          const data = await response.json();
-          const areaName = data?.area || data?.name;
-          if (!areaName || typeof areaName !== 'string' || areaName.trim() === '') {
-            setBaseLocation(null);
-            setBaseStatus('empty');
-            setBaseSentence('Location Empty');
-            return;
-          }
-
-          // Live location returned
-          setBaseLocation(areaName.trim());
-          setBaseStatus('success');
-          setBaseSentence(areaName.trim());
-        } catch {
-          setBaseLocation(null);
-          setBaseStatus('unreachable');
-          setBaseSentence('Unavailable');
+        } catch (apiError) {
+          console.warn('API location resolution error:', apiError);
         }
+
+        // Resolve area locally from valid browser coordinates
+        const fallbackArea = findNearestSingaporeArea(latitude, longitude);
+        setBaseLocation(fallbackArea);
+        setBaseStatus('success');
+        setBaseSentence(fallbackArea);
       },
-      async (err) => {
-        if (err.code === 1 /* PERMISSION_DENIED */) {
+      (error: GeolocationPositionError) => {
+        // 4. When navigator.geolocation.getCurrentPosition() fails, log complete error information:
+        //    - error.code
+        //    - error.message
+        console.error('navigator.geolocation.getCurrentPosition() failed with error:', {
+          code: error.code,
+          message: error.message,
+        });
+        console.log('error.code:', error.code);
+        console.log('error.message:', error.message);
+
+        // 5. Distinguish between these GeolocationPositionError codes:
+        //    1 = PERMISSION_DENIED
+        //    2 = POSITION_UNAVAILABLE
+        //    3 = TIMEOUT
+        // 6. Do not display every geolocation failure as "Location access refused."
+        //    Display:
+        //    PERMISSION_DENIED: Location access is unavailable or has been blocked.
+        //    POSITION_UNAVAILABLE: Your current location could not be determined.
+        //    TIMEOUT: Determining your location took too long. Please try again.
+        if (error.code === 1 /* PERMISSION_DENIED */) {
+          console.log('Geolocation failure code 1: PERMISSION_DENIED');
           setBaseLocation(null);
           setBaseStatus('refused');
-          setBaseSentence('Access Refused');
-        } else if (err.code === 2 /* POSITION_UNAVAILABLE */ || err.code === 3 /* TIMEOUT */) {
+          setBaseSentence('Location access is unavailable or has been blocked.');
+        } else if (error.code === 2 /* POSITION_UNAVAILABLE */) {
+          console.log('Geolocation failure code 2: POSITION_UNAVAILABLE');
           setBaseLocation(null);
           setBaseStatus('unreachable');
-          setBaseSentence('Unavailable');
+          setBaseSentence('Your current location could not be determined.');
+        } else if (error.code === 3 /* TIMEOUT */) {
+          console.log('Geolocation failure code 3: TIMEOUT');
+          setBaseLocation(null);
+          setBaseStatus('unreachable');
+          setBaseSentence('Determining your location took too long. Please try again.');
         } else {
-          // Attempt serverless function fallback
-          try {
-            const fallbackRes = await fetch('/api/location');
-            if (fallbackRes.ok) {
-              const fallbackData = await fallbackRes.json();
-              const fbArea = fallbackData?.area || fallbackData?.name;
-              if (fbArea) {
-                setBaseLocation(fbArea.trim());
-                setBaseStatus('success');
-                setBaseSentence(fbArea.trim());
-                return;
-              }
-            }
-          } catch {
-            // ignore fallback
-          }
-
+          console.log(`Geolocation failure unknown code: ${error.code}`);
           setBaseLocation(null);
           setBaseStatus('unreachable');
-          setBaseSentence('Unavailable');
+          setBaseSentence('Your current location could not be determined.');
         }
       },
       {
         enableHighAccuracy: false,
-        timeout: 8000,
+        timeout: 10000,
         maximumAge: 60000,
       }
     );

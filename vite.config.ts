@@ -5,7 +5,37 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      {
+        name: 'api-serverless-middleware',
+        configureServer(server) {
+          server.middlewares.use(async (req, res, next) => {
+            const url = req.url || '';
+            if (url.startsWith('/api/location')) {
+              try {
+                const { default: handler } = await import('./api/location.js');
+                await handler(req, res);
+                return;
+              } catch (e) {
+                console.error('Error executing /api/location:', e);
+              }
+            }
+            if (url.startsWith('/api/health')) {
+              try {
+                const { default: handler } = await import('./api/health.js');
+                await handler(req, res);
+                return;
+              } catch (e) {
+                console.error('Error executing /api/health:', e);
+              }
+            }
+            next();
+          });
+        },
+      },
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
